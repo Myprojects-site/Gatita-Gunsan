@@ -1,0 +1,118 @@
+rules_version = '2';
+// 같이타 KSNU - Firestore 보안 규칙
+// Firebase 콘솔 > Firestore Database > 규칙 탭에 이 내용을 그대로 붙여 넣고 [게시]를 누르세요.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function rideDoc(id) { return get(/databases/$(database)/documents/rides/$(id)).data; }
+    function isDriver(id) { return signedIn() && rideDoc(id).driverUid == request.auth.uid; }
+    function isMember(id) { return signedIn() && request.auth.uid in rideDoc(id).members; }
+    function isParticipant(id) { return isDriver(id) || isMember(id); }
+    function checkedIn(id, uid) { return exists(/databases/$(database)/documents/rides/$(id)/checkins/$(uid)); }
+
+    // 회원 정보: 로그인한 사람은 누구나 읽기(이름, 학과, 동네, 차량), 쓰기는 본인만
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.sid == resource.data.sid
+                    && request.resource.data.createdAt == resource.data.createdAt;
+      // 계좌 같은 민감 정보는 본인만
+      match /secret/{doc} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+    }
+
+    match /rides/{id} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.driverUid == request.auth.uid
+                    && request.resource.data.members.size() == 0
+                    && request.resource.data.status == 'open'
+                    && request.resource.data.seats is int
+                    && request.resource.data.seats >= 1 && request.resource.data.seats <= 6;
+      allow update: if signedIn() && (driverUpdate() || joinOrLeave());
+      allow delete: if false;
+
+      function driverUpdate() {
+        return resource.data.driverUid == request.auth.uid
+            && request.resource.data.driverUid == request.auth.uid
+            && request.resource.data.members == resource.data.members;
+      }
+      // 탑승자는 자기 자신을 넣거나 빼는 것만 가능
+      function joinOrLeave() {
+        let keys = request.resource.data.diff(resource.data).affectedKeys();
+        let before = resource.data.members;
+        let after = request.resource.data.members;
+        let u = request.auth.uid;
+        return keys.hasOnly(['members', 'memberNames', 'status'])
+            && resource.data.status in ['open', 'full']
+            && request.resource.data.status in ['open', 'full']
+            && (
+              (after.size() == before.size() + 1 && after.hasAll(before) && u in after && !(u in before)
+                && after.size() <= resource.data.seats && u != resource.data.driverUid)
+              ||
+              (after.size() == before.size() - 1 && before.hasAll(after) && u in before && !(u in after))
+            );
+      }
+
+      // 운전자 계좌: 카풀에 탄 사람과 운전자만
+      match /private/{doc} {
+        allow read: if isParticipant(id);
+        allow write: if isDriver(id);
+      }
+      // 탑승 QR 코드: 운전자만
+      match /driverOnly/{doc} {
+        allow read, write: if isDriver(id);
+      }
+      // 탑승 인증: 운전자 QR의 코드와 맞아야만 기록됨
+      match /checkins/{uid} {
+        allow read: if isParticipant(id);
+        allow create: if signedIn() && request.auth.uid == uid && isMember(id)
+                      && request.resource.data.code == get(/databases/$(database)/documents/rides/$(id)/driverOnly/board).data.code;
+        allow update, delete: if false;
+      }
+      // 예약금 / 요금 송금 기록: 본인 것만, 한 번씩만
+      match /payments/{pid} {
+        allow read: if isParticipant(id);
+        allow create: if signedIn() && isMember(id)
+                      && request.resource.data.uid == request.auth.uid
+                      && request.resource.data.kind in ['deposit', 'fare']
+                      && pid == request.auth.uid + '_' + request.resource.data.kind;
+        allow update, delete: if false;
+      }
+      // 단톡방
+      match /messages/{mid} {
+        allow read: if isParticipant(id);
+        allow create: if isParticipant(id) && request.resource.data.uid == request.auth.uid;
+        allow update, delete: if false;
+      }
+      // 위치 공유: 같은 카풀 사람끼리만 보고, 본인 위치만 씀
+      match /locs/{uid} {
+        allow read: if isParticipant(id);
+        allow write: if isParticipant(id) && request.auth.uid == uid;
+      }
+    }
+
+    // 매너온도 평가
+    // - 카풀이 끝난(done) 뒤에만
+    // - 운전자 <-> QR로 탑승 인증한 탑승자 사이에서만
+    // - 같은 카풀에서 같은 상대에게 한 번만, 수정·삭제 불가
+    match /ratings/{rid} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.from == request.auth.uid
+                    && rid == request.resource.data.rideId + '_' + request.auth.uid + '_' + request.resource.data.to
+                    && request.resource.data.score in [-1, 0, 1]
+                    && rideDoc(request.resource.data.rideId).status == 'done'
+                    && pairOk(request.resource.data.rideId, request.auth.uid, request.resource.data.to);
+      allow update, delete: if false;
+
+      function pairOk(id, a, b) {
+        let r = rideDoc(id);
+        return a != b && ((r.driverUid == a && checkedIn(id, b)) || (r.driverUid == b && checkedIn(id, a)));
+      }
+    }
+  }
+}
