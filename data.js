@@ -30,14 +30,18 @@ const PLACES = [
   { label: '군산역', lat: 35.9893, lng: 126.7430 },
 ];
 
-/* 카풀 금액 계산 기준 (운전자가 글 올릴 때 추천값으로만 쓰고, 직접 고칠 수 있음) */
+/* 카풀 금액 계산 기준 (운전자가 글 올릴 때 추천값으로만 쓰고, 직접 고칠 수 있음)
+   추천 금액 = 편도 거리 × 1km당 기름값 ÷ (탑승자 + 운전자), 최소 금액 적용, 100원 단위 올림 */
 const FARE = {
-  fuelPerKm: 140,        // 1km당 기름값 (휘발유 1,680원/L, 연비 12km/L 기준)
+  fuelPrice: 1855,       // 휘발유 1L 가격 (원). 바뀌면 이 숫자만 고치세요
+  fuelPriceAsOf: '2026년 11월 둘째 주 전국 평균, 오피넷',
+  kmPerL: 12,            // 연비 (km/L). 준중형 승용차 기준으로 잡은 값
   roadFactor: 1.3,       // 직선거리 → 도로거리 보정
   minFare: 2000,          // 1인 최소 금액
   defaultDeposit: 1000,  // 예약금 기본값 (요금에 포함)
   cancelFreeMin: 60,     // 출발 60분 전까지 취소하면 예약금 돌려받음
 };
+FARE.fuelPerKm = Math.round(FARE.fuelPrice / FARE.kmPerL);   // 1km당 기름값
 
 /* 매너온도 규칙: 아무나 함부로 올리고 내리지 못하게 */
 const MANNER = {

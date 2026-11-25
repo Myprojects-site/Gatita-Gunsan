@@ -38,6 +38,33 @@
   }
   const initial = n => esc((n || '?').trim().charAt(0));
   const ceil100 = n => Math.ceil(n / 100) * 100;
+  /* 금액 책정 근거: 올린 시점의 기준을 카풀에 함께 저장해, 나중에 기름값이 바뀌어도 설명이 그대로 남게 한다 */
+  function makeFareBasis(distanceKm, seats) {
+    const split = seats + 1;
+    const fuelCost = Math.round(distanceKm * FARE.fuelPerKm);
+    const raw = fuelCost / split;
+    const suggested = Math.max(FARE.minFare, ceil100(raw));
+    return { distanceKm, seats, split, fuelPrice: FARE.fuelPrice, kmPerL: FARE.kmPerL, fuelPerKm: FARE.fuelPerKm, asOf: FARE.fuelPriceAsOf, fuelCost, raw: Math.round(raw), suggested, minApplied: ceil100(raw) < FARE.minFare, minFare: FARE.minFare };
+  }
+  function fareExplainHTML(r) {
+    const b = r.fareBasis || makeFareBasis(r.distanceKm, r.seats);
+    const diff = r.fare - b.suggested;
+    return `
+      <ol class="fare-why">
+        <li><span>편도 운전 거리</span><b>${b.distanceKm}km</b></li>
+        <li><span>1km당 기름값<small>휘발유 ${won(b.fuelPrice)}/L ÷ 연비 ${b.kmPerL}km/L</small></span><b>${won(b.fuelPerKm)}</b></li>
+        <li><span>편도 기름값<small>${b.distanceKm}km × ${won(b.fuelPerKm)}</small></span><b>${won(b.fuelCost)}</b></li>
+        <li><span>나누는 사람<small>탑승자 ${b.seats}명 + 운전자 1명</small></span><b>÷ ${b.split}명</b></li>
+        <li><span>1인 기름값</span><b>${won(b.raw)}</b></li>
+        <li class="sum"><span>앱 추천 금액<small>${b.minApplied ? `최소 금액 ${won(b.minFare)} 적용` : '100원 단위 올림'}</small></span><b>${won(b.suggested)}</b></li>
+        <li class="sum ${diff ? 'diff' : ''}"><span>운전자가 정한 금액<small>${diff === 0 ? '추천 금액 그대로' : `추천보다 ${won(Math.abs(diff))} ${diff > 0 ? '높음' : '낮음'}`}</small></span><b>${won(r.fare)}</b></li>
+      </ol>
+      ${r.fareNote ? `<p class="fare-note"><b>운전자 설명</b> ${esc(r.fareNote)}</p>` : ''}
+      <p class="hint">기름값 기준: ${esc(b.asOf)}. 운전자도 같은 거리만큼 움직이니 운전자까지 포함해 나눠요. 통행료·주차비가 있으면 운전자 설명에 적어요.</p>`;
+  }
+  function fareSheet(r) {
+    openSheet(`<p class="sheet-eyebrow">금액 책정 이유</p><h3>1인 편도 ${won(r.fare)}은 이렇게 정해졌어요</h3>${fareExplainHTML(r)}<button class="btn btn-navy" data-close style="margin-top:14px">확인</button>`);
+  }
   const sixDigits = () => String(Math.floor(100000 + Math.random() * 900000));
   const errMsg = e => ({
     'sid-taken': '이미 가입된 학번이에요. 로그인해 주세요.',
@@ -272,7 +299,7 @@
         <section class="auth-card">
           <div class="segs"><button class="seg ${login ? 'on' : ''}" data-mode="login">로그인</button><button class="seg ${!login ? 'on' : ''}" data-mode="signup">회원가입</button></div>
           <form data-form novalidate>
-            <label class="field"><span>학번</span><input class="input" name="sid" inputmode="numeric" autocomplete="username" placeholder="예) 202412345" maxlength="10"></label>
+            <label class="field"><span>학번</span><input class="input" name="sid" inputmode="numeric" autocomplete="username" placeholder="예) 2600001" maxlength="7"></label>
             ${login ? '' : `
             <label class="field"><span>이름</span><input class="input" name="name" autocomplete="name" placeholder="홍길동" maxlength="10"></label>
             <label class="field"><span>학과</span><input class="input" name="dept" placeholder="예) 컴퓨터정보공학과" maxlength="20"></label>`}
@@ -293,7 +320,7 @@
       f.addEventListener('submit', async e => {
         e.preventDefault(); errEl.hidden = true;
         const v = Object.fromEntries(new FormData(f)); v.sid = (v.sid || '').trim();
-        if (!/^\d{8,10}$/.test(v.sid)) return fail('학번은 숫자 8~10자리로 입력해 주세요.');
+        if (!/^\d{7}$/.test(v.sid)) return fail('학번은 숫자 7자리로 입력해 주세요. 예) 2600001');
         if (!v.pw) return fail('비밀번호를 입력해 주세요.');
         const btn = $('[data-submit]', root); btn.disabled = true;
         try {
@@ -432,7 +459,8 @@
           ${list.length ? `<div class="ride-list">${list.map(rideCard).join('')}</div>` : `<p class="empty">${range === 'all' ? '지금 모집 중인 카풀이 없어요.' : `${range}km 안에 모집 중인 카풀이 없어요.<br>범위를 넓혀 보세요.`}</p>`}`;
       }
       const fab = me.driver ? `<button class="fab" data-go="create">${UI.plus}카풀 올리기</button>` : `<button class="fab" data-go="driver">${UI.plus}운전자 등록</button>`;
-      return `${tabs}${body}${fab}`;
+      const demo = B.mode === 'local' ? '<p class="hint bad" style="margin:-4px 2px 12px">지금은 데모 모드라 이 브라우저에서 올린 카풀만 보여요. 다른 사람과 함께 쓰려면 js/config.js에 Firebase 설정을 넣어 주세요.</p>' : '';
+      return `${demo}${tabs}${body}${fab}`;
     },
     mount(root) {
       $$('[data-tab]', root).forEach(b => b.onclick = () => { this.tab = b.dataset.tab; rerender(); });
@@ -568,16 +596,16 @@
       return {
         from: d ? { label: `${d.name} 근처`, lat: d.lat, lng: d.lng } : null,
         to: PLACES[0], day: t.getDate() === new Date().getDate() ? 0 : 1, time: hm(t.getTime()),
-        seats: 3, distance: null, fare: null, fareTouched: false, distTouched: false, deposit: FARE.defaultDeposit, memo: '',
+        seats: 3, distance: null, fare: null, fareTouched: false, distTouched: false, deposit: FARE.defaultDeposit, memo: '', fareNote: '',
       };
     },
     calc() {
       const f = this.f;
       if (!f.distTouched && f.from && f.to) f.distance = Math.max(0.5, Math.round(kmBetween(f.from, f.to) * FARE.roadFactor * 10) / 10);
       if (!f.distance) f.distance = 1;
-      const sug = Math.max(FARE.minFare, ceil100(f.distance * FARE.fuelPerKm / (f.seats + 1)));
-      if (!f.fareTouched) f.fare = sug;
-      f.sug = sug;
+      f.basis = makeFareBasis(f.distance, f.seats);
+      if (!f.fareTouched) f.fare = f.basis.suggested;
+      f.sug = f.basis.suggested;
     },
     render() {
       if (!this.f) this.f = this.defaults();
@@ -601,7 +629,8 @@
           <div class="card">
             <label class="field"><span>운전 거리 <small>편도, 직접 고칠 수 있어요</small></span><input class="input" name="distance" type="number" step="0.1" min="0.5" max="200" value="${f.distance}"></label>
             <label class="field"><span>1인 편도 금액</span><input class="input" name="fare" type="number" step="100" min="0" value="${f.fare}"></label>
-            <p class="hint">추천 ${won(f.sug)} · 편도 ${f.distance}km × 기름값 ${FARE.fuelPerKm}원/km ÷ ${f.seats + 1}명(운전자 포함), 최소 ${won(FARE.minFare)}</p>
+            <div data-fare-why>${fareExplainHTML({ fare: f.fare, fareBasis: f.basis })}</div>
+            <label class="field" style="margin-top:12px"><span>금액 설명 <small data-note-req>${f.fare !== f.sug ? '추천과 다르면 꼭 적어 주세요' : '선택'}</small></span><input class="input" name="fareNote" value="${esc(f.fareNote)}" placeholder="예) 새만금 쪽 통행료 포함, 짐이 많으면 500원 추가" maxlength="60"></label>
             <div class="field" style="margin-top:14px"><span>예약금 <small>요금에 포함, 노쇼 대비</small></span>
               <div class="segs small">${[500, 1000, 1500].map(v => `<button type="button" class="seg ${f.deposit === v ? 'on' : ''}" data-dep="${v}">${won(v)}</button>`).join('')}</div>
               <p class="hint">신청할 때 예약금을 먼저 보내고, 도착하면 나머지 ${won(Math.max(0, f.fare - f.deposit))}을 보내요. 출발 ${FARE.cancelFreeMin}분 전까지 취소하면 돌려받아요.</p></div>
@@ -615,13 +644,17 @@
       if (!S.me || !S.me.driver) { navigate('driver', true); return; }
       const form = $('[data-form]', root), f = this.f;
       const sync = () => {
-        f.memo = form.memo.value; f.time = form.time.value; f.day = +form.day.value;
+        f.memo = form.memo.value; f.time = form.time.value; f.day = +form.day.value; f.fareNote = form.fareNote.value;
         if (f.from) f.from.label = form.fromLabel.value.trim() || f.from.label;
       };
       form.addEventListener('input', e => {
         sync();
         if (e.target.name === 'distance') { f.distTouched = true; f.distance = Math.max(0.5, +e.target.value || 0.5); if (!f.fareTouched) { this.calc(); form.fare.value = f.fare; } }
         if (e.target.name === 'fare') { f.fareTouched = true; f.fare = Math.max(0, +e.target.value || 0); }
+        if (['distance', 'fare'].includes(e.target.name)) {
+          $('[data-fare-why]', root).innerHTML = fareExplainHTML({ fare: f.fare, fareBasis: f.basis });
+          $('[data-note-req]', root).textContent = f.fare !== f.sug ? '추천과 다르면 꼭 적어 주세요' : '선택';
+        }
       });
       form.to.onchange = () => {
         sync();
@@ -645,6 +678,7 @@
         const d = new Date(); d.setDate(d.getDate() + f.day); d.setHours(H, M, 0, 0);
         if (d.getTime() < Date.now() - 5 * 60000) return fail('지난 시간이에요. 날짜나 시간을 바꿔 주세요.');
         if (f.fare <= f.deposit) return fail('1인 금액은 예약금보다 커야 해요.');
+        if (f.fare !== f.sug && f.fareNote.trim().length < 4) return fail('추천 금액과 다르게 정했다면 금액 설명에 이유를 적어 주세요.');
         let secret;
         try { secret = await B.getDriverSecret(); } catch (x) { secret = null; }
         if (!secret) { navigate('driver'); return; }
@@ -655,6 +689,7 @@
             dong: me.dong ? me.dong.name : nearestDong(f.from).name,
             from: { label: f.from.label, lat: f.from.lat, lng: f.from.lng }, to: { label: f.to.label, lat: f.to.lat, lng: f.to.lng },
             departAt: d.getTime(), seats: f.seats, distanceKm: f.distance, fare: f.fare, deposit: f.deposit, memo: f.memo.trim(), pickup: null, noShow: [],
+            fareBasis: makeFareBasis(f.distance, f.seats), fareNote: f.fareNote.trim(),
           }, secret);
           await B.sendMessage(id, { type: 'system', text: `카풀이 열렸어요. ${fmtWhen(d.getTime()).day} ${hm(d.getTime())} 출발 · ${f.seats}자리 모집 중` });
           this.f = null;
@@ -692,6 +727,7 @@
           <div class="fare-box"><span>1인 편도 금액</span><b class="total">${won(r.fare)}</b><span class="muted">신청할 때 예약금</span><b>${won(r.deposit)}</b><span class="muted">도착 후 보낼 돈</span><b>${won(r.fare - r.deposit)}</b></div>
           ${r.memo ? `<p style="font-size:14px;margin-top:12px;line-height:1.55">"${esc(r.memo)}"</p>` : ''}
         </div>
+        <div class="card"><p class="sheet-eyebrow">금액 책정 이유</p>${fareExplainHTML(r)}</div>
         <div class="card">
           <div class="person"><span class="pav">${initial(r.driverName)}</span><span class="t"><strong>${esc(r.driverName)} <small class="muted">${esc(r.driverDept || '')}</small></strong><small>${esc(r.carColor)} ${esc(r.carModel)} · ${joined ? esc(r.carNo) : esc(r.carNo.replace(/\d{4}$/, '****'))}</small></span>${tempHTML(r.driverUid)}</div>
           <p class="hint" style="margin-top:10px">차량 번호 전체는 신청한 뒤에 보여요.</p>
@@ -847,7 +883,7 @@
         } else if (r.status === 'done') acts = '<button class="btn btn-navy" data-go="rate/' + esc(r.id) + '">매너 평가하기</button>';
       }
       el.innerHTML = `
-        <div class="row"><span class="chip ${['done', 'canceled'].includes(r.status) ? 'chip-gray' : 'chip-green'}">${STATUS[r.status]}</span><span class="muted" style="font-size:13px">${w.day} ${w.time} 출발</span><span class="spacer"></span><b style="color:var(--orange-ink)">${won(r.fare)}</b></div>
+        <div class="row"><span class="chip ${['done', 'canceled'].includes(r.status) ? 'chip-gray' : 'chip-green'}">${STATUS[r.status]}</span><span class="muted" style="font-size:13px">${w.day} ${w.time} 출발</span><span class="spacer"></span><button class="fare-link" data-act="farewhy">${won(r.fare)} <small>이유</small></button></div>
         <div class="route-line"><i></i><strong>${esc(r.from.label)}</strong><span class="v"></span><span></span><i class="end"></i><strong>${esc(r.to.label)}</strong></div>
         ${r.pickup ? `<p class="hint" style="margin-top:8px"><b style="color:var(--orange-ink)">탑승 장소</b> ${esc(r.pickup.label)}</p>` : ''}
         <p class="hint">${esc(r.carColor)} ${esc(r.carModel)} · <b>${esc(r.carNo)}</b> · ${esc(r.driverName)}${drv ? ' (나)' : ''}</p>
@@ -863,6 +899,7 @@
     async action(a) {
       const r = this.ride(), id = r.id, sys = text => B.sendMessage(id, { type: 'system', text });
       try {
+        if (a === 'farewhy') return fareSheet(r);
         if (a === 'boardqr') return this.boardQR();
         if (a === 'payqr') return this.payQR();
         if (a === 'scanboard') return this.scanBoard();
@@ -993,9 +1030,11 @@
         <p class="sheet-eyebrow">${esc(r.driverName)}님에게 보내기</p>
         <div class="amount"><b>${won(amount)}</b><small>${amount ? `요금 ${won(r.fare)} − 예약금 ${won(r.fare - amount)}` : '예약금으로 요금을 모두 냈어요'}</small></div>
         ${pay ? `<div class="account"><small>${esc(pay.bank)} · 예금주 ${esc(pay.holder)}</small><b>${esc(pay.account)}</b><button class="link" data-copy style="font-size:13px">계좌번호 복사</button></div>` : '<p class="hint bad">계좌를 불러오지 못했어요.</p>'}
+        <p style="text-align:center;margin:-4px 0 12px"><button class="link" data-why style="font-size:13px">금액 책정 이유 보기</button></p>
         <p class="sheet-text" style="margin-bottom:14px">은행 앱에서 이 계좌로 보낸 뒤 아래 버튼을 눌러 주세요. 운전자에게 바로 알림이 가요.</p>
         <div class="sheet-actions"><button class="btn btn-ghost" data-close>나중에</button><button class="btn btn-orange" data-sent>돈 보내기</button></div>`,
       sh => {
+        $('[data-why]', sh).onclick = () => fareSheet(r);
         const c = $('[data-copy]', sh);
         if (c) c.onclick = async () => toast(await copyText(pay.account.replace(/-/g, '')) ? '계좌번호를 복사했어요' : '복사하지 못했어요');
         $('[data-sent]', sh).onclick = async () => {
